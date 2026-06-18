@@ -1,0 +1,18 @@
+{
+  "environments": {
+    "prod": {
+      "portalId": "123456",
+      "auth": {
+        "type": "private_app",
+        "tokenEnvVar": "HUBSPOT_PROD_TOKEN"
+      }
+    },
+    "dev": {
+      "portalId": "654321",
+      "auth": {
+        "type": "private_app",
+        "tokenEnvVar": "HUBSPOT_DEV_TOKEN"
+      }
+    }
+  }
+}
