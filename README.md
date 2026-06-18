@@ -58,3 +58,11 @@ $env:HUBSPOT_DEV_TOKEN="your-token"
 ```
 ## Status
 Early development — milestone-based build
+
+## Added Ignored Files
+
+```text
+dist/
+schemas/
+.hubspot-shaper.local.json
+```
