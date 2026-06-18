@@ -145,3 +145,4 @@ vite.config.ts.timestamp-*
 dist/
 schemas/
 .hubspot-shaper.local.json
+*-discovery.json
