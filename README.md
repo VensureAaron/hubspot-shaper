@@ -22,3 +22,39 @@ hubspot-shaper treats HubSpot schema as code:
 
 ```bash
 npm install
+```
+
+## Usage
+npm run dev -- discover --env prod
+
+## Environment Variables
+
+You must define:
+
+HUBSPOT_PROD_TOKEN
+HUBSPOT_DEV_TOKEN
+
+```powershell
+$env:HUBSPOT_PROD_TOKEN="your-token"
+
+$env:HUBSPOT_DEV_TOKEN="your-token"
+```
+
+## Config
+.hubspot-shaper.json
+
+```json
+{
+  "environments": {
+    "prod": {
+      "portalId": "123456",
+      "auth": {
+        "type": "private_app",
+        "tokenEnvVar": "HUBSPOT_PROD_TOKEN"
+      }
+    }
+  }
+}
+```
+## Status
+Early development — milestone-based build
