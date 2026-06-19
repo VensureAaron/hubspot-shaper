@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { runDiscover } from "./commands/discover";
 import { runCompare } from "./commands/compare";
 import { runCompareLive } from "./commands/compare-live";
+import { runApply } from "./commands/apply";
 
 const program = new Command();
 
@@ -61,5 +62,18 @@ program
       toEnv: options.toEnv,
     });
   });
-
+program
+  .command("apply")
+  .requiredOption("--from-env <env>", "Source environment (e.g., prod)")
+  .requiredOption("--to-env <env>", "Target environment (e.g., dev)")
+  .option("--dry-run", "Run without making changes")
+  .action(
+    async (options: { fromEnv: string; toEnv: string; dryRun?: boolean }) => {
+      await runApply({
+        fromEnv: options.fromEnv,
+        toEnv: options.toEnv,
+        dryRun: options.dryRun === true,
+      });
+    },
+  );
 program.parse();
