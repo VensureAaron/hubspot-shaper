@@ -4,6 +4,12 @@
     "module": "CommonJS",
     "rootDir": "./src",
     "outDir": "./dist",
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+
     "strict": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,

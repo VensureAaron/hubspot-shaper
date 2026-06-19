@@ -1,48 +1,86 @@
-import fs from "fs"
-import path from "path"
-import { resolveEnv } from "../../core/environment/envResolver"
-import { HubSpotClient } from "../../core/api/hubspotClient"
-import { runDiscovery } from "../../core/discovery/discoveryService"
-import { log } from "../../core/logging/logger"
+import { resolveEnv } from "../../core/environment/envResolver";
+import { HubSpotClient } from "../../core/api/hubspotClient";
+import { runDiscovery } from "../../core/discovery/discoveryService";
+import { log } from "../../core/logging/logger";
+import { writeDiscoveryOutput } from "@/utils/output";
 
-export async function runDiscover(envName: string, outFile?: string) {
-  log(`Resolving environment: ${envName}`)
+type ExportMode = "full" | "split" | "both";
 
-  const env = resolveEnv(envName)
-  const client = new HubSpotClient(env.token)
+interface RunDiscoverOptions {
+  exportMode?: ExportMode;
+  fileName?: string;
+}
 
-  log(`Running discovery on portal ${env.portalId}`)
+export async function runDiscover(
+  envName: string,
+  options?: RunDiscoverOptions,
+) {
+  const exportMode = options?.exportMode;
+  const fileName = options?.fileName;
+  const runTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  log(`Resolving environment: ${envName}`);
 
-  const result = await runDiscovery(client)
+  const env = resolveEnv(envName);
+  const client = new HubSpotClient(env.token);
 
-  log("Discovery complete")
-  console.log("")
+  log(`Running discovery on portal ${env.portalId}`);
 
-  const objects = result.objects
+  const result = await runDiscovery(client);
+
+  log("Discovery complete");
+  console.log("");
+
+  const objects = result.objects;
 
   for (const [objectKey, objectData] of Object.entries(objects)) {
     const typedObjectData = objectData as {
-      properties?: unknown[]
-      pipelines?: unknown[]
-    }
+      properties?: unknown[];
+      pipelines?: unknown[];
+    };
 
-    const propertyCount = typedObjectData.properties?.length ?? 0
-    const pipelineCount = typedObjectData.pipelines?.length ?? 0
+    const propertyCount = typedObjectData.properties?.length ?? 0;
+    const pipelineCount = typedObjectData.pipelines?.length ?? 0;
 
     if (pipelineCount > 0) {
-      console.log(`- ${objectKey}: ${propertyCount} properties, ${pipelineCount} pipelines`)
+      console.log(
+        `- ${objectKey}: ${propertyCount} properties, ${pipelineCount} pipelines`,
+      );
     } else {
-      console.log(`- ${objectKey}: ${propertyCount} properties`)
+      console.log(`- ${objectKey}: ${propertyCount} properties`);
     }
   }
 
-  console.log("")
-  console.log(`Custom objects detected: ${result.customObjectsDetected}`)
+  console.log("");
+  console.log(`Custom objects detected: ${result.customObjectsDetected}`);
 
-  if (outFile) {
-    const resolvedPath = path.resolve(outFile)
-    fs.writeFileSync(resolvedPath, JSON.stringify(result, null, 2), "utf-8")
-    console.log("")
-    log(`Full discovery output written to ${resolvedPath}`)
+  // ✅ EXPORT LOGIC (mode-driven)
+  if (exportMode) {
+    console.log("");
+
+    // ✅ Split per object
+    if (exportMode === "split" || exportMode === "both") {
+      for (const [objectKey, objectData] of Object.entries(objects)) {
+        const outputPath = writeDiscoveryOutput(objectData, {
+          env: envName,
+          entity: objectKey,
+          filenameOverride: fileName ? `${objectKey}-${fileName}` : undefined,
+          timestamp: runTimestamp,
+        });
+
+        log(`Exported ${objectKey} → ${outputPath}`);
+      }
+    }
+
+    // ✅ Full export
+    if (exportMode === "full" || exportMode === "both") {
+      const fullOutputPath = writeDiscoveryOutput(result, {
+        env: envName,
+        entity: "full",
+        filenameOverride: fileName ? `full-${fileName}` : undefined,
+        timestamp: runTimestamp,
+      });
+
+      log(`Full discovery output written to ${fullOutputPath}`);
+    }
   }
 }

@@ -146,3 +146,6 @@ dist/
 schemas/
 .hubspot-shaper.local.json
 *-discovery.json
+
+# Discovery output (generated)
+output/
