@@ -67,12 +67,19 @@ program
   .requiredOption("--from-env <env>", "Source environment (e.g., prod)")
   .requiredOption("--to-env <env>", "Target environment (e.g., dev)")
   .option("--dry-run", "Run without making changes")
+  .option("--yes", "Skip confirmation prompt")
   .action(
-    async (options: { fromEnv: string; toEnv: string; dryRun?: boolean }) => {
+    async (options: {
+      fromEnv: string;
+      toEnv: string;
+      dryRun?: boolean;
+      yes?: boolean;
+    }) => {
       await runApply({
         fromEnv: options.fromEnv,
         toEnv: options.toEnv,
         dryRun: options.dryRun === true,
+        yes: options.yes === true,
       });
     },
   );
