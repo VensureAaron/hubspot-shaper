@@ -9,6 +9,7 @@ interface ApplyOptions {
   toEnv: string;
   dryRun?: boolean;
   yes?: boolean;
+  force?: boolean;
 }
 
 function isDeployableProperty(prop: any): boolean {
@@ -17,6 +18,18 @@ function isDeployableProperty(prop: any): boolean {
   if (prop.calculated) return false;
   if (prop.readOnlyDefinition) return false;
   return true;
+}
+
+function isCompatibleTypeChange(fromProp: any, toProp: any): boolean {
+  const fromType = toProp.type;
+  const toType = fromProp.type;
+  const toFieldType = fromProp.fieldType;
+
+  if (fromType === "string" && toType === "string") {
+    return ["text", "textarea", "email", "url"].includes(toFieldType);
+  }
+
+  return false;
 }
 
 function promptConfirm(question: string): Promise<boolean> {
@@ -37,10 +50,11 @@ export async function runApply(options: ApplyOptions) {
   const { fromEnv, toEnv } = options;
   const dryRun = options.dryRun === true;
   const autoApprove = options.yes === true;
+  const allowBreaking = options.force === true;
 
-  if (dryRun) {
-    log("Dry run mode enabled");
-  }
+  let destructiveChanges = 0;
+
+  if (dryRun) log("Dry run mode enabled");
 
   log(`Resolving environments...`);
 
@@ -56,14 +70,22 @@ export async function runApply(options: ApplyOptions) {
   log(`Running discovery on TARGET: ${toEnv}`);
   const targetData = await runDiscovery(targetClient);
 
-  log(`Building apply plan...`);
-  console.log("");
+  log(`Building apply plan...\n`);
 
   const fromObjects = sourceData.objects || {};
   const toObjects = targetData.objects || {};
 
-  const plan: Record<string, any[]> = {};
-  let totalCreates = 0;
+  const plan: Record<
+    string,
+    {
+      create: any[];
+      update: { name: string; changes: any }[];
+      breaking: any[];
+    }
+  > = {};
+
+  let totalActions = 0;
+  let hasBreaking = false;
 
   for (const [objectKey, fromObj] of Object.entries(fromObjects)) {
     const toObj = toObjects[objectKey] || {};
@@ -71,42 +93,213 @@ export async function runApply(options: ApplyOptions) {
     const fromProps = (fromObj as any).properties || [];
     const toProps = (toObj as any).properties || [];
 
-    const toPropNames = new Set(toProps.map((p: any) => p.name));
+    const propertiesToCreate: any[] = [];
+    const propertiesToUpdate: any[] = [];
+    const propertiesBreaking: any[] = [];
 
-    const propertiesToCreate = fromProps.filter(
-      (prop: any) => isDeployableProperty(prop) && !toPropNames.has(prop.name),
+    for (const fromProp of fromProps) {
+      if (!isDeployableProperty(fromProp)) continue;
+
+      const matching = toProps.find((p: any) => p.name === fromProp.name);
+
+      // ✅ CREATE
+      if (!matching) {
+        propertiesToCreate.push(fromProp);
+        continue;
+      }
+
+      const changes: any = {};
+
+      // ✅ LABEL
+      if (fromProp.label !== matching.label) {
+        changes.label = fromProp.label;
+      }
+
+      // ✅ GROUP
+      if (fromProp.groupName !== matching.groupName) {
+        changes.groupName = fromProp.groupName;
+      }
+
+      // ✅ TYPE
+      if (fromProp.type !== matching.type) {
+        if (!isCompatibleTypeChange(fromProp, matching)) {
+          propertiesBreaking.push({
+            name: fromProp.name,
+            fromType: `${matching.type}/${matching.fieldType}`,
+            toType: `${fromProp.type}/${fromProp.fieldType}`,
+          });
+          hasBreaking = true;
+          continue;
+        }
+
+        changes.type = fromProp.type;
+      }
+
+      // ✅ FIELD TYPE
+      if (fromProp.fieldType !== matching.fieldType) {
+        changes.fieldType = fromProp.fieldType;
+      }
+
+      // ✅ ENUM DIFF (FULL + CLASSIFICATION)
+      if (
+        fromProp.type === "enumeration" &&
+        Array.isArray(fromProp.options) &&
+        Array.isArray(matching.options)
+      ) {
+        const fromValues: string[] = fromProp.options.map((o: any) => o.value);
+        const toValues: string[] = matching.options.map((o: any) => o.value);
+
+        const added = fromValues.filter((v) => !toValues.includes(v));
+        const removed = toValues.filter((v) => !fromValues.includes(v));
+
+        const reordered =
+          added.length === 0 &&
+          removed.length === 0 &&
+          fromValues.some((v, i) => v !== toValues[i]);
+
+        if (added.length || removed.length || reordered) {
+          if (removed.length > 0) {
+            destructiveChanges += removed.length;
+          }
+
+          const normalizedFull = fromProp.options.map(
+            (opt: any, index: number) => ({
+              label: opt.label,
+              value: opt.value,
+              description: opt.description ?? "",
+              hidden: opt.hidden ?? false,
+              displayOrder: index,
+            }),
+          );
+
+          changes.options = {
+            full: normalizedFull,
+            added,
+            removed,
+            reordered,
+          };
+        }
+      }
+
+      if (Object.keys(changes).length > 0) {
+        propertiesToUpdate.push({
+          name: fromProp.name,
+          changes,
+        });
+      }
+    }
+
+    if (
+      propertiesToCreate.length ||
+      propertiesToUpdate.length ||
+      propertiesBreaking.length
+    ) {
+      plan[objectKey] = {
+        create: propertiesToCreate,
+        update: propertiesToUpdate,
+        breaking: propertiesBreaking,
+      };
+
+      totalActions += propertiesToCreate.length + propertiesToUpdate.length;
+    }
+  }
+
+  // ✅ OUTPUT
+  console.log("Apply Plan Summary:\n");
+
+  for (const [objectKey, planObj] of Object.entries(plan)) {
+    console.log(`${objectKey}:\n`);
+
+    // ✅ CREATE
+    if (planObj.create.length > 0) {
+      console.log(`  + create: ${planObj.create.length} properties`);
+      planObj.create.forEach((p) => console.log(`    - ${p.name}`));
+      console.log("");
+    }
+
+    // ✅ UPDATE
+    if (planObj.update.length > 0) {
+      console.log(`  ~ update: ${planObj.update.length} properties`);
+
+      for (const p of planObj.update) {
+        const changes = p.changes;
+
+        const parts: string[] = [];
+
+        for (const key of Object.keys(changes)) {
+          if (key === "options") {
+            const opt = changes.options;
+            const sub: string[] = [];
+
+            if (opt.added.length) sub.push(`+${opt.added.length} ✅`);
+            if (opt.removed.length) sub.push(`-${opt.removed.length} ⚠️`);
+            if (opt.reordered) sub.push("reorder");
+
+            sub.push(opt.removed.length > 0 ? "destructive" : "safe");
+
+            parts.push(`options(${sub.join(", ")})`);
+          } else {
+            parts.push(key);
+          }
+        }
+
+        console.log(`    - ${p.name} (${parts.join(", ")})`);
+
+        // ✅ detailed breakdown
+        if (changes.options) {
+          const opt = changes.options;
+
+          if (opt.added.length) {
+            console.log(`      + added:`);
+            opt.added.forEach((v: string) => console.log(`        - ${v}`));
+          }
+
+          if (opt.removed.length) {
+            console.log(`      - removed:`);
+            opt.removed.forEach((v: string) => console.log(`        - ${v}`));
+          }
+
+          if (opt.reordered) {
+            console.log(`      ↕ reordered`);
+          }
+        }
+      }
+
+      console.log("");
+    }
+
+    // ✅ BREAKING
+    if (planObj.breaking.length > 0) {
+      console.log(`  ! breaking: ${planObj.breaking.length} properties`);
+      planObj.breaking.forEach((p) =>
+        console.log(`    - ${p.name} (${p.fromType} → ${p.toType})`),
+      );
+      console.log("");
+    }
+  }
+
+  console.log(`Total actions: ${totalActions}\n`);
+
+  // ✅ WARNINGS
+  if (destructiveChanges > 0) {
+    console.log("⚠️  WARNING: Destructive changes detected.");
+    console.log(
+      `${destructiveChanges} option(s) will be removed. This may impact records and workflows.\n`,
     );
-
-    if (propertiesToCreate.length > 0) {
-      plan[objectKey] = propertiesToCreate;
-      totalCreates += propertiesToCreate.length;
-    }
   }
 
-  // ✅ PLAN SUMMARY
-  console.log("Apply Plan Summary:");
-  console.log("");
-
-  for (const [objectKey, props] of Object.entries(plan)) {
-    console.log(`${objectKey}:`);
-
-    const label = props.length === 1 ? "property" : "properties";
-    console.log(`  + create: ${props.length} ${label}`);
-
-    const sortedProps = [...props].sort((a, b) => a.name.localeCompare(b.name));
-
-    // ✅ List each property
-    for (const prop of sortedProps) {
-      console.log(`    - ${prop.name}`);
-    }
+  if (destructiveChanges > 0 && !allowBreaking) {
+    log("Destructive removals blocked. Re-run with --force to allow.");
+    return;
   }
 
-  console.log("");
-  console.log(`Total actions: ${totalCreates}`);
-  console.log("");
+  if (hasBreaking && !allowBreaking) {
+    log("Breaking changes detected.");
+    return;
+  }
 
-  if (totalCreates === 0) {
-    log("No changes detected. Nothing to apply.");
+  if (totalActions === 0) {
+    log("No changes detected.");
     return;
   }
 
@@ -115,38 +308,38 @@ export async function runApply(options: ApplyOptions) {
     return;
   }
 
-  // ✅ CONFIRMATION STEP
   if (!autoApprove) {
     const confirmed = await promptConfirm(
-      `Proceed with applying ${totalCreates} changes to ${toEnv}? (y/n): `,
+      destructiveChanges > 0
+        ? `Proceed with applying ${totalActions} changes to ${toEnv}? (includes destructive changes) (y/N): `
+        : `Proceed with applying ${totalActions} changes to ${toEnv}? (y/N): `,
     );
 
     if (!confirmed) {
-      log("Operation cancelled by user.");
+      log("Operation cancelled.");
       return;
     }
   }
 
-  // ✅ APPLY EXECUTION
-  for (const [objectKey, props] of Object.entries(plan)) {
+  // ✅ APPLY
+  for (const [objectKey, planObj] of Object.entries(plan)) {
     console.log(`\n[${objectKey}]`);
 
-    for (const prop of props as any[]) {
+    for (const prop of planObj.create) {
       console.log(`+ CREATE property: ${prop.name}`);
+      await targetClient.createProperty(objectKey, prop);
+    }
 
-      try {
-        await targetClient.createProperty(objectKey, {
-          name: prop.name,
-          label: prop.label,
-          type: prop.type,
-          fieldType: prop.fieldType,
-          groupName: prop.groupName,
-        });
+    for (const prop of planObj.update) {
+      console.log(`~ UPDATE property: ${prop.name}`);
 
-        log(`Created ${prop.name} in ${objectKey}`);
-      } catch (err: any) {
-        console.error(`Failed to create ${prop.name}: ${err.message}`);
+      const payload: any = { ...prop.changes };
+
+      if (prop.changes.options) {
+        payload.options = prop.changes.options.full;
       }
+
+      await targetClient.updateProperty(objectKey, prop.name, payload);
     }
   }
 

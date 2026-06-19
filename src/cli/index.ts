@@ -68,19 +68,23 @@ program
   .requiredOption("--to-env <env>", "Target environment (e.g., dev)")
   .option("--dry-run", "Run without making changes")
   .option("--yes", "Skip confirmation prompt")
+  .option("--force", "Allow destructive changes (use with caution)")
   .action(
     async (options: {
       fromEnv: string;
       toEnv: string;
       dryRun?: boolean;
       yes?: boolean;
+      force?: boolean;
     }) => {
       await runApply({
         fromEnv: options.fromEnv,
         toEnv: options.toEnv,
         dryRun: options.dryRun === true,
         yes: options.yes === true,
+        force: options.force === true,
       });
     },
   );
+
 program.parse();
